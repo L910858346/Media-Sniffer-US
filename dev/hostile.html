@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>沙箱模拟页</title>
+<style>
+  body { margin: 0; padding: 16px; font: 14px/1.7 system-ui, sans-serif; background: #0f1420; color: #dbe3f2; }
+  code { color: #8ab4ff; }
+</style>
+</head>
+<body>
+  <p>模拟脚本管理器沙箱的两个恶劣条件：</p>
+  <p>① <code>window.top === window</code> 恒为 false（代理对象比较失真）</p>
+  <p>② 读取 <code>window.frameElement</code> 抛 SecurityError（沙箱禁止）</p>
+  <p>这种情况下脚本仍然必须把界面挂出来——证据不足时按顶层处理，由握手纠正。</p>
+
+  <script>
+    // 必须在用户脚本之前执行
+    try {
+      Object.defineProperty(window, 'top', {
+        get: function () {
+          return { sandboxProxy: true };
+        },
+        configurable: true,
+      });
+    } catch (e) {
+      window.__topPatchFailed = String(e);
+    }
+    try {
+      Object.defineProperty(window, 'frameElement', {
+        get: function () {
+          throw new Error('SecurityError: blocked by sandbox');
+        },
+        configurable: true,
+      });
+    } catch (e) {
+      window.__framePatchFailed = String(e);
+    }
+  </script>
+  <script src="../media-sniffer.user.js"></script>
+</body>
+</html>

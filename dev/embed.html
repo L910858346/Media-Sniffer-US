@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>内嵌页</title>
+<style>
+  body { margin: 0; font: 13px/1.6 system-ui, sans-serif; background: #0f1420; color: #dbe3f2; }
+  .box { padding: 14px; }
+</style>
+</head>
+<body>
+  <div class="box">内嵌页：这里请求的媒体应合并到顶层列表</div>
+  <script src="../media-sniffer.user.js"></script>
+  <script>
+    setTimeout(() => {
+      fetch('/media/clip.webm?from=embed').catch(() => {});
+    }, 300);
+  </script>
+</body>
+</html>

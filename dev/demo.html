@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>第 1 集 · 测试视频页面</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px 16px 40px;
+    background: #0a0d14;
+    color: #c9d3e4;
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  h1 { font-size: 19px; margin: 4px 0 12px; letter-spacing: -.2px; }
+  .player {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #1a2333, #10151f);
+    border: 1px solid #202a3c;
+    display: grid; place-items: center;
+    overflow: hidden;
+  }
+  .player span { font-size: 13px; color: #64718a; }
+  video { width: 100%; display: block; }
+  p { color: #7b879c; font-size: 13px; }
+  .note { margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: #121826; border: 1px solid #1d2637; font-size: 12.5px; color: #7f8ca3; }
+  code { background: #1a2130; padding: 1px 5px; border-radius: 4px; font-size: 12px; color: #9fb4d6; }
+</style>
+</head>
+<body>
+  <h1>第 1 集 · 测试视频页面</h1>
+
+  <div class="player"><span>模拟播放器区域</span></div>
+  <video id="v" playsinline muted></video>
+
+  <p>这个页面由 <code>dev/server.mjs</code> 提供，用来在没有真实站点的情况下验证脚本的探测、解析、合并与界面。</p>
+
+  <div class="note">
+    自动驱动参数：<code>?open=1</code> 展开面板 · <code>?job=1</code> 自动跑一次合并
+  </div>
+
+  <script>
+    // 在脚本之前准备好"环境开关"
+    const params = new URLSearchParams(location.search);
+    const XORIGIN = !!params.get('xorigin');
+    // 换一个端口就是换一个 origin，而且服务器不给 CORS 头 —— 完美复刻
+    // "页面 fetch 必然 Load failed、只有 GM 通道能拿到分片"的真实场景
+    const MEDIA_BASE = XORIGIN ? `http://127.0.0.1:${Number(location.port) + 1}` : '';
+
+    if (params.get('gm')) {
+      // 模拟脚本管理器的特权通道：不受页面 CORS / CSP 约束
+      window.GM_xmlhttpRequest = function (opts) {
+        const ctrl = new AbortController();
+        // 走同源代理，模拟 GM 在服务端抓取的特性：不受页面 CORS 限制
+        fetch('/__proxy?u=' + encodeURIComponent(opts.url), {
+          headers: opts.headers || {},
+          signal: ctrl.signal,
+        })
+          .then(async (res) => {
+            const buf = await res.arrayBuffer();
+            opts.onload && opts.onload({ status: res.status, response: buf });
+          })
+          .catch(() => opts.onerror && opts.onerror(new Error('gm failed')));
+        return { abort: () => ctrl.abort() };
+      };
+    }
+  </script>
+  <script src="../media-sniffer.user.js"></script>
+  <script>
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const host = () => document.getElementById('ts-sniffer-ios-host');
+    const sr = () => { const h = host(); return h && h.shadowRoot; };
+
+    async function waitFor(fn, timeout = 12000) {
+      const t0 = Date.now();
+      while (Date.now() - t0 < timeout) {
+        let v = null;
+        try { v = fn(); } catch (e) { v = null; }
+        if (v) return v;
+        await wait(100);
+      }
+      return null;
+    }
+
+    async function simulate() {
+      const v = document.getElementById('v');
+
+      if (XORIGIN) {
+        // 跨域源：这些请求在页面里都会失败，只有 GM 通道能拿到内容
+        await fetch(`${MEDIA_BASE}/hls/720p/index.m3u8`).catch(() => {});
+        for (let i = 0; i < 6; i++) {
+          await fetch(`${MEDIA_BASE}/hls/720p/seg-${i}.ts`).catch(() => {});
+        }
+        return;
+      }
+
+      // 1) 原生 HLS 入口：把 m3u8 挂到 video 上（桌面 Chrome 播不了，但请求会发出去）
+      try { v.src = '/hls/master.m3u8'; } catch (e) {}
+
+      // 2) 模拟 hls.js 之类的播放器：先拉主列表，再拉分片
+      await fetch('/hls/master.m3u8').catch(() => {});
+      await fetch('/hls/720p/index.m3u8').catch(() => {});
+
+      for (let i = 0; i < 6; i++) {
+        await fetch(`/hls/720p/seg-${i}.ts`).catch(() => {});
+      }
+      // 3) 一条 mp4 直链
+      await fetch('/media/clip.mp4').catch(() => {});
+      // 4) 一条加密轨道，验证 AES 路径的列表解析
+      await fetch('/hls/enc/index.m3u8').catch(() => {});
+      // 5) 一条"分片返回 204"的坏轨道，验证空响应会被拦下
+      await fetch('/hls/zero/index.m3u8').catch(() => {});
+      // 6) 一条"每个分片都多个前缀字节"的轨道，验证包对齐自动修复
+      await fetch('/hls/off/index.m3u8').catch(() => {});
+
+      // 7) 播放列表与分片不在同一目录（播放列表在 /hls/，分片在 /cdn/），
+      //    分片是 AES 密文 —— 直接合并必失败，必须靠"回找播放列表 + 解密"救回来
+      await fetch('/hls/enc2/index.m3u8').catch(() => {});
+      for (let i = 0; i < 3; i++) {
+        await fetch(`/cdn/enc2/seg-${i}.ts`).catch(() => {});
+      }
+
+      // 8) 只有密文分片，页面里既没有播放列表也没有密钥 —— 用来验证"手工填密钥解密"
+      for (let i = 0; i < 3; i++) {
+        await fetch(`/cdn/enc3/seg-${i}.ts`).catch(() => {});
+      }
+
+      // 9) fMP4：播放列表带 #EXT-X-MAP 的正常站点
+      await fetch('/hls/fmp4/index.m3u8').catch(() => {});
+
+      // 10) fMP4 但播放列表没有 MAP，分片在另一个目录 —— 必须靠回找 init.mp4
+      for (let i = 0; i < 3; i++) {
+        await fetch(`/cdn/fmp4b/seg-${i}.m4s`).catch(() => {});
+      }
+
+      // 11) 直链视频：mov / avi / webm（真实可解码）
+      await fetch('/media/clip.mov?v=1').catch(() => {});
+      await fetch('/media/clip.avi?v=1').catch(() => {});
+      await fetch('/media/clip.webm').catch(() => {});
+
+      // 12) 图片走真实的 <img>：只有这样才能拿到资源计时里的尺寸，
+      //     用来验证"6KB 小图被过滤"
+      for (const src of ['/media/pic.jpg', '/media/tiny.gif', '/media/logo.png']) {
+        const img = new Image();
+        img.src = src;
+      }
+      // 无扩展名，只能靠 Content-Type 认
+      await fetch('/img?id=1').catch(() => {});
+
+      // 12.5) 跨域 + 防盗链：只有带完整 Referer 的请求才 200
+      fetch('http://127.0.0.1:8788/media/hotlink.mp4').catch(() => {});
+      // 12.55) 永远 403：验证浏览器下载退路
+      fetch('/media/always403.mp4').catch(() => {});
+
+      // 12.6) 更严的：必须带 Range 才放行
+      fetch('/media/hotlink-range.mp4').catch(() => {});
+
+      // 13) 无扩展名图片走 <img>：验证 initiatorType / DOM 扫描兜底
+      // 14) 24x24 大体积图标：验证分辨率过滤
+      for (const src of ['/media/photo', '/media/icon.svg']) {
+        const img = new Image();
+        img.src = src;
+        document.body.appendChild(img);
+      }
+
+      // 15) 音频：一个正规扩展名走 <audio>，一个无扩展名走 <audio> 兜底
+      for (const src of ['/media/tone.mp3', '/media/voice']) {
+        const a = document.createElement('audio');
+        a.src = src;
+        a.preload = 'auto';
+        document.body.appendChild(a);
+      }
+    }
+
+    (async () => {
+      await simulate();
+
+      if (params.get('probe')) {
+        await waitFor(() => sr() && sr().querySelector('.fab.show'));
+        const fab = sr().querySelector('.fab');
+        fab.click();
+        await wait(300);
+        const sheet = sr().querySelector('.sheet');
+        const root = sr().querySelector('.root');
+        const row = sr().querySelector('.row');
+        const btn = sr().querySelector('.row [data-act="download"]');
+        const box = (el) => {
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { x: Math.round(r.x), w: Math.round(r.width), right: Math.round(r.right) };
+        };
+        document.title = 'PROBE ' + JSON.stringify({
+          vw: innerWidth,
+          vh: innerHeight,
+          dpr: devicePixelRatio,
+          docScrollW: document.documentElement.scrollWidth,
+          bodyScrollW: document.body.scrollWidth,
+          root: box(root),
+          sheet: box(sheet),
+          row: box(row),
+          btn: box(btn),
+          sheetCss: sheet && getComputedStyle(sheet).position + '/' + getComputedStyle(sheet).width,
+          hostPos: getComputedStyle(host()).position,
+        });
+        return;
+      }
+
+      if (!params.get('open') && !params.get('job')) return;
+
+      const fab = await waitFor(() => sr() && sr().querySelector('.fab.show'));
+      if (!fab) { document.title = 'ERR: no fab'; return; }
+      fab.click();
+
+      if (!params.get('job')) return;
+
+      await wait(400);
+      const rows = [...sr().querySelectorAll('.row')];
+      const m3u8Row = rows.find((r) => r.querySelector('.tag') && r.querySelector('.tag').textContent === 'M3U8');
+      if (!m3u8Row) { document.title = 'ERR: no m3u8 row'; return; }
+      m3u8Row.querySelector('[data-act="download"]').click();
+
+      const firstAction = await waitFor(() => sr().querySelector('.mask .modal-body .btn'));
+      if (!firstAction) { document.title = 'ERR: no quality modal'; return; }
+      firstAction.click();
+
+      await waitFor(() => sr().querySelector('.job .bar.done'), 20000);
+      document.title = 'DONE';
+    })();
+  </script>
+</body>
+</html>

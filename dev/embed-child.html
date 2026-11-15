@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>跨域子帧</title>
+<style>body{font:14px/1.6 system-ui;padding:10px}</style>
+<h3>子帧（8788）</h3>
+<script>
+  // 记录本帧收到的所有 sniff 消息（ack 应该出现在这里）
+  window.__msgLog = [];
+  window.addEventListener('message', (e) => {
+    if (e.data && e.data.tss) window.__msgLog.push(e.data.tss);
+  });
+</script>
+<script src="../media-sniffer.user.js"></script>
+<script>
+  setInterval(() => {
+    try {
+      parent.postMessage({
+        frameProbe: document.querySelectorAll('#ts-sniffer-ios-host').length,
+        log: (window.__msgLog || []).slice(-4),
+        diag: (window.__tsSniffer && window.__tsSniffer.diag) ? window.__tsSniffer.diag() : null,
+        fe: (() => { try { return window.frameElement === null ? 'null' : (window.frameElement ? 'element' : 'undefined'); } catch (e) { return 'THROW'; } })(),
+        topSelf: window.top === window,
+      }, '*');
+    } catch (e) {}
+  }, 400);
+  setTimeout(() => { fetch('/hls/720p/index.m3u8').catch(() => {}); }, 400);
+  setTimeout(() => { fetch('/hls/720p/seg-0.ts').catch(() => {}); }, 700);
+</script>

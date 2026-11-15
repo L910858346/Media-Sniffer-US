@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>跨域内嵌宿主</title>
+<style>body{font:15px/1.7 system-ui;padding:20px}</style>
+<h1>宿主页（8787）</h1>
+<iframe id="child" src="http://127.0.0.1:8788/dev/embed-child.html?t=1" style="width:320px;height:200px;border:1px solid #ccc"></iframe>
+<script src="../media-sniffer.user.js"></script>
+<script>
+  // 探针：子帧定期上报自己文档里有几个悬浮球宿主
+  window.__childFabCount = -1;
+  window.__childLog = [];
+  addEventListener('message', (e) => {
+    if (e.data && typeof e.data.frameProbe === 'number') {
+      window.__childFabCount = e.data.frameProbe;
+      window.__childLog = e.data.log || [];
+      window.__childDiag = e.data.diag || null;
+      window.__childFe = e.data.fe;
+      window.__childTopSelf = e.data.topSelf;
+    }
+  });
+  // 宿主自己也加载一点媒体，验证列表合并不受影响
+  setTimeout(() => { const v = document.createElement('video'); v.src = '/media/direct.mp4'; v.muted = true; document.body.appendChild(v); }, 300);
+</script>
